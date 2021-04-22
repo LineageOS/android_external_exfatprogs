@@ -529,7 +529,7 @@ free:
 }
 
 int exfat_show_volume_serial(struct exfat_blk_dev *bd,
-		struct exfat_user_input *ui)
+		__attribute__((unused)) struct exfat_user_input *ui)
 {
 	struct pbr *ppbr;
 	int ret;
