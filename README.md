@@ -53,7 +53,10 @@ Usage example:
 Usage example:
     1. check the consistency.
         fsck.exfat /dev/sda1
-    2. repair and fix.(preparing)
+    2. repair a corrupted device and create files in /LOST+FOUND, which have clusters allocated but not belonged to any files when reparing the device.
+        fsck.exfat -p -s /dev/sda1
+    3. repair a corrupted device in the same way above, but answering yes to all questions.
+        fsck.exfat -y -s /dev/sda1
 
 - tune.exfat:
     Adjust tunable filesystem parameters on an exFAT filesystem
@@ -87,6 +90,12 @@ Usage example:
 Usage example:
     dump.exfat /dev/sda1
 
+- exfat2img:
+    Dump metadata of an exFAT filesystem
+
+Usage example:
+    exfat2img -o sda1.dump /dev/sda1
+
 ```
 
 ## Benchmarks
@@ -116,4 +125,5 @@ If you have any issues, please create [issues][1] or contact to [Namjae Jeon](ma
 
 ## Contributor information
 * Please base your pull requests on the `exfat-next` branch.
-* Make sure you add 'Signed-Off' information to your commits (e. g. `git commit --signoff`).
+* Make sure you add 'Signed-Off' information to your commits (e.g. `git commit --signoff`).
+* Please check your code contribution using kernel dev-tool script [checkpatch](https://docs.kernel.org/dev-tools/checkpatch.html).
