@@ -1,3 +1,60 @@
+exfatprogs 1.2.9 - released 2025-05-12
+======================================
+
+NEW FEATURES :
+ * dump.exfat: support dumping directory entry sets,
+   which prints all fields of directory entries and
+   cluster chains. See a man page.
+
+CHANGES :
+ * exfatprogs: update the Github action for build test
+   with Debain + clang + lld.
+
+exfatprogs 1.2.8 - released 2025-03-04
+======================================
+
+BUG FIXES :
+ * dump.exfat: fix an incorrect output of an entry
+   position in 32-bit system.
+ * mkfs.exfat: fill an oem sector with zero instead
+   of one.
+ * exfatprogs: fix compilation on musl based systems
+   due to loff_t type. And update the Github action
+   to validate builds on the system.
+
+exfatprogs 1.2.7 - released 2025-02-03
+======================================
+
+NEW FEATURES :
+ * fsck.exfat: support repairing the upcase table.
+
+CHANGES :
+ * exfatprogs: make sure to load the tbl preprocessor
+   for man pages.
+
+BUG FIXES :
+ * exfatprogs: fix a double free memory error.
+ * dump.exfat: fix a constraint that volume label, bitmap,
+   upcase table must be located at the beginning of a root
+   directory.
+
+exfatprogs 1.2.6 - released 2024-11-20
+======================================
+
+CHANGES :
+ * exfatprogs: replace obsolete autoconf and libtool
+   macros.
+ * mkfs.exfat: prefer the physical block size over
+   the logical block size for the exFAT sector size.
+ * mkfs.exfat: add notes about the format of the volume
+   GUID to the man page.
+ * mkfs.exfat: fix an incorrect calculation of the number
+   of used clusters.
+
+BUG FIXES :
+ * exfatlabel: fix an user input error when setting
+   a volume serial or label.
+
 exfatprogs 1.2.5 - released 2024-08-06
 ======================================
 

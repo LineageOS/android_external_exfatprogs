@@ -553,7 +553,7 @@ void exfat_calc_dentry_checksum(struct exfat_dentry *dentry,
 	}
 }
 
-static uint16_t calc_dentry_set_checksum(struct exfat_dentry *dset, int dcount)
+uint16_t calc_dentry_set_checksum(struct exfat_dentry *dset, int dcount)
 {
 	uint16_t checksum;
 	int i;
@@ -711,15 +711,9 @@ int exfat_update_file_dentry_set(struct exfat *exfat,
 	return 0;
 }
 
-static int find_free_cluster(struct exfat *exfat,
-			     clus_t start, clus_t *new_clu)
+static int __find_free_cluster(struct exfat *exfat, clus_t *new_clu,
+		clus_t start, clus_t end)
 {
-	clus_t end = le32_to_cpu(exfat->bs->bsx.clu_count) +
-		EXFAT_FIRST_CLUSTER;
-
-	if (!exfat_heap_clus(exfat, start))
-		return -EINVAL;
-
 	while (start < end) {
 		if (exfat_bitmap_find_zero(exfat, exfat->alloc_bitmap,
 					   start, new_clu))
@@ -729,20 +723,61 @@ static int find_free_cluster(struct exfat *exfat,
 		start = *new_clu + 1;
 	}
 
-	end = start;
-	start = EXFAT_FIRST_CLUSTER;
-	while (start < end) {
-		if (exfat_bitmap_find_zero(exfat, exfat->alloc_bitmap,
-					   start, new_clu))
-			goto out_nospc;
-		if (!exfat_bitmap_get(exfat->disk_bitmap, *new_clu))
-			return 0;
-		start = *new_clu + 1;
+	*new_clu = EXFAT_EOF_CLUSTER;
+
+	return -ENOSPC;
+}
+
+static int find_free_cluster(struct exfat *exfat,
+			     clus_t start, clus_t *new_clu)
+{
+	clus_t end = le32_to_cpu(exfat->bs->bsx.clu_count) +
+		EXFAT_FIRST_CLUSTER;
+
+	if (!exfat_heap_clus(exfat, start))
+		return -EINVAL;
+
+	if (__find_free_cluster(exfat, new_clu, start, end) == 0)
+		return 0;
+
+	return __find_free_cluster(exfat, new_clu, EXFAT_FIRST_CLUSTER, start);
+}
+
+/* Find multiple contiguous free clusters */
+int exfat_find_free_cluster(struct exfat *exfat, int clu_count,
+			    clus_t *new_clu)
+{
+	int ret, i;
+	clus_t clu;
+	clus_t start = EXFAT_FIRST_CLUSTER;
+	clus_t end = le32_to_cpu(exfat->bs->bsx.clu_count) +
+		EXFAT_FIRST_CLUSTER;
+
+find_again:
+	ret = __find_free_cluster(exfat, &clu, start, end);
+	if (ret < 0)
+		return ret;
+
+	*new_clu = clu;
+	start = clu + 1;
+
+	for (i = 1; i < clu_count && start < end; i++) {
+		ret = __find_free_cluster(exfat, &clu, start, end);
+		if (ret < 0)
+			return ret;
+
+		if (clu != start) {
+			start = clu;
+			goto find_again;
+		}
+
+		start = clu + 1;
 	}
 
-out_nospc:
-	*new_clu = EXFAT_EOF_CLUSTER;
-	return -ENOSPC;
+	if (start >= end)
+		return -ENOSPC;
+
+	return 0;
 }
 
 static int exfat_map_cluster(struct exfat *exfat, struct exfat_inode *inode,
@@ -828,8 +863,8 @@ static int exfat_write_dentry_set(struct exfat *exfat,
 	return 0;
 }
 
-static int exfat_alloc_cluster(struct exfat *exfat, struct exfat_inode *inode,
-			       clus_t *new_clu)
+int exfat_alloc_cluster(struct exfat *exfat, struct exfat_inode *inode,
+		clus_t *new_clu)
 {
 	clus_t last_clu;
 	int err;
