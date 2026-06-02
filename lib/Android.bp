@@ -2,6 +2,7 @@
 
 cc_library_static {
     name: "libexfat",
+    host_supported: true,
 
     srcs: [
         "libexfat.c",
