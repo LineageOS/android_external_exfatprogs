@@ -11,6 +11,7 @@ package {
 
 cc_binary {
     name: "fsck.exfat",
+    host_supported: true,
 
     srcs: [
         "fsck.c",
