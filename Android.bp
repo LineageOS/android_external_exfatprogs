@@ -33,6 +33,7 @@ license {
 
 cc_library_headers {
     name: "libexfatprogs-headers",
+    host_supported: true,
     export_include_dirs: [
         "include",
         "mkfs",
@@ -40,12 +41,13 @@ cc_library_headers {
         "tune",
         "label",
         "dump",
-	"exfat2img",
+        "exfat2img",
     ],
 }
 
 cc_defaults {
     name: "exfatprogs-defaults",
+    host_supported: true,
     header_libs: ["libexfatprogs-headers"],
     export_header_lib_headers: ["libexfatprogs-headers"],
     cflags: ["-D_FILE_OFFSET_BITS=64"],
