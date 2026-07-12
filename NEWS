@@ -1,3 +1,120 @@
+exfatprogs 1.4.2 - released 2026-06-15
+======================================
+
+CHANGES :
+ * exfatprogs: install lsdosattr and chdosattr in /bin instead of
+   /sbin.
+
+BUG FIXES :
+ * dump.exfat: prevent heap buffer overflow in name parsing.
+
+exfatprogs 1.4.1 - released 2026-05-28
+======================================
+
+BUG FIXES :
+ * exfatprogs: include missing DOS attribute headers and
+   upcase helper files in release tarballs.
+
+exfatprogs 1.4.0 - released 2026-05-26
+======================================
+
+NEW FEATURES :
+ * mkfs.exfat: add partition table creation support so
+   newly formatted devices are recognized by Windows.
+ * fsck.exfat: add "--put-mbr" and "--clear-mbr"
+   options to add or remove partition table entries for
+   Windows compatibility on existing volumes.
+ * mkfs.exfat: add the "--upcase" option to format with
+   a user-supplied upcase table.
+ * exfatprogs: add example upcase tables and a helper
+   script to generate upcase table binaries for testing.
+ * exfatprogs: add chdosattr and lsdosattr utilities to
+   view and modify DOS file attributes.
+
+CHANGES :
+ * mkfs.exfat: detect foreign filesystems and partition
+   tables before formatting, requiring "-F" for
+   interactive overwrite of non-exFAT volumes.
+ * mkfs.exfat: always clear the first 0x10000 bytes and
+   improve zero-out I/O, verification, and progress logs
+   during formatting.
+ * mkfs.exfat: reduce memory usage when formatting very
+   large devices.
+ * exfatprogs: include the release date in version output.
+ * mkfs.exfat: print the volume UUID after formatting,
+   warn when the "-s" option is used, and default to
+   512-byte clusters on very small devices.
+ * exfatprogs: recover from short read/write completions
+   during I/O operations.
+ * exfatprogs: refuse to run on pre-2.6 Linux kernels.
+
+BUG FIXES :
+ * fsck.exfat: fix bitmap bit counting sign extension and
+   handle progress bar overflow on corrupted bitmaps.
+ * mkfs.exfat: fix 32-bit overflow issues that could
+   select a wrong cluster size or fail with "-f".
+ * mkfs.exfat: reject invalid zero or overflowing size
+   arguments and correct the total cluster limit for
+   edge-case large volumes.
+ * mkfs.exfat: fix incorrect volume UUID printing and
+   use safer direct I/O for write verification.
+ * exfatprogs: fix 64-bit LBA sector I/O, integer
+   signedness issues, and memory errors reported by
+   valgrind in several utilities.
+
+exfatprogs 1.3.2 - release 2026-03-09
+===================================
+
+NEW FEATURES :
+ * fsck.exfat: add an option to show a progress bar
+   while checking a filesystem.
+
+CHANGES :
+ * mkfs.exfat: discard blocks prior to write outs by
+   default.
+ * mkfs.exfat: add a read-after-write verification for
+   the volume boot record.
+ * exfatprogs: adjust utility exit codes and add log
+   messages for malloc() failures.
+
+BUG FIXES :
+ * dump.exfat: handle paths including '.', '..', and
+   repeated '/'.
+ * fsck.exfat: convert 0x80 entries into deleted file
+   entries to avoid bogus dentry errors.
+ * fsck.exfat: fix an uninitialized variable warning.
+
+exfatprogs 1.3.1 - released 2025-12-15
+=====================================
+
+NEW FEATURES :
+ * fsck.exfat: support repairing the allocation bitmap size.
+
+CHANGES :
+ * exfatprogs: temporarily disable building defrag.exfat due to reported
+   data loss.
+
+BUG FIXES :
+ * libexfat: fix a NULL pointer dereference in read_file_dentry_set().
+
+exfatprogs 1.3.0 - released 2025-10-15
+======================================
+
+NEW FEATURES :
+ * defrag.exfat: add a tool to defragment an exFAT
+   filesystem or assess its fragmentation status.
+   See a man page.
+
+CHANGES :
+ * mkfs.exfat: minimize zero-out initialization work
+   in quick format mode to reduce I/O time.
+ * fsck.exfat: set the entry after an unused entry as unused.
+
+BUG FIXES :
+ * mkfs.exfat: fix incorrect FAT byte length calculation.
+ * mkfs.exfat: avoid setting physical sector size into sector_size field.
+ * fsck.exfat: fix a memory leaks in an error path.
+
 exfatprogs 1.2.9 - released 2025-05-12
 ======================================
 

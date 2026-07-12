@@ -6,6 +6,7 @@
 #define _FSCK_H
 
 #include "list.h"
+#include "utils.h"
 
 enum fsck_ui_options {
 	FSCK_OPTS_REPAIR_ASK	= 0x01,
@@ -16,6 +17,7 @@ enum fsck_ui_options {
 	FSCK_OPTS_REPAIR_ALL	= 0x0f,
 	FSCK_OPTS_IGNORE_BAD_FS_NAME	= 0x10,
 	FSCK_OPTS_RESCUE_CLUS	= 0x20,
+	FSCK_OPTS_PROGRESS_BAR	= 0x40,
 };
 
 struct exfat;
@@ -26,10 +28,12 @@ struct exfat_fsck {
 	struct exfat_de_iter	de_iter;
 	struct buffer_desc	*buffer_desc;	/* cluster * 2 */
 	enum fsck_ui_options	options;
+	int			mbr; /* negative to clear, positive to put */
 	bool			dirty:1;
 	bool			dirty_fat:1;
 
 	char *name_hash_bitmap;
+	struct progress_bar progress_bar;
 };
 
 off_t exfat_c2o(struct exfat *exfat, unsigned int clus);

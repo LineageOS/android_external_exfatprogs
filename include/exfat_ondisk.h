@@ -54,7 +54,7 @@
 #define MSDOS_UNUSED		0x00	/* end of directory */
 
 #define EXFAT_LAST		0x00	/* end of directory */
-#define EXFAT_DELETE		~(0x80)
+#define EXFAT_DELETE		((~(0x80)) & 0xFF)
 #define IS_EXFAT_DELETED(x)	((x) < 0x80) /* deleted file (0x01~0x7F) */
 #define EXFAT_INVAL		0x80	/* invalid value */
 #define EXFAT_SEC		(EXFAT_INVAL | (1 << 6))
@@ -140,7 +140,23 @@ struct bsx64 {
 struct pbr {
 	struct bpb64 bpb;
 	struct bsx64 bsx;
-	__u8 boot_code[390];
+	union {
+		__u8 boot_code[390];
+		/* Watch out for unaligned memory access!! */
+		struct {
+			__u8 code[320];
+			__le32 disk_signature;
+			__le16 copy_protected;
+			struct {
+				__u8 active;
+				__u8 chs_ofs[3];
+				__u8 type;
+				__u8 chs_end[3];
+				__le32 ofs_lba;
+				__le32 len_lba;
+			} __attribute__((packed)) part_entries[4];
+		} __attribute__((packed)) mbr;
+	};
 	__le16 signature;
 };
 

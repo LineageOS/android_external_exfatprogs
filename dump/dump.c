@@ -33,22 +33,6 @@
 #define dump_dentry_field_wrap(fmt, ...)	\
 	exfat_info("   %-30s  " fmt "\n", "", ##__VA_ARGS__)
 
-static const unsigned char used_bit[] = {
-	0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3,/*  0 ~  19*/
-	2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5, 1, 2, 2, 3, 2, 3, 3, 4,/* 20 ~  39*/
-	2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5,/* 40 ~  59*/
-	4, 5, 5, 6, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,/* 60 ~  79*/
-	2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 2, 3, 3, 4,/* 80 ~  99*/
-	3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6,/*100 ~ 119*/
-	4, 5, 5, 6, 5, 6, 6, 7, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4,/*120 ~ 139*/
-	3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,/*140 ~ 159*/
-	2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5,/*160 ~ 179*/
-	4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 2, 3, 3, 4, 3, 4, 4, 5,/*180 ~ 199*/
-	3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6,/*200 ~ 219*/
-	5, 6, 6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,/*220 ~ 239*/
-	4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8             /*240 ~ 255*/
-};
-
 static void usage(void)
 {
 	fprintf(stderr, "Usage: dump.exfat\n");
@@ -74,18 +58,6 @@ static struct option opts[] = {
 	{"?",			no_argument,		NULL,	'?' },
 	{NULL,			0,			NULL,	 0  }
 };
-
-static unsigned int exfat_count_used_clusters(unsigned char *bitmap,
-		unsigned long long bitmap_len)
-{
-	unsigned int count = 0;
-	unsigned long long i;
-
-	for (i = 0; i < bitmap_len; i++)
-		count += used_bit[bitmap[i]];
-
-	return count;
-}
 
 static int exfat_read_dentry(struct exfat *exfat, struct exfat_inode *inode,
 		uint8_t type, struct exfat_dentry *dentry, off_t *dentry_off)
@@ -216,20 +188,17 @@ static int exfat_show_fs_info(struct exfat *exfat)
 		dump_field("Bitmap size", "%llu", bitmap_len);
 
 		if (bitmap_len > EXFAT_BITMAP_SIZE(exfat->clus_count)) {
-			exfat_err("Invalid bitmap size\n");
+			exfat_err("Invalid bitmap size: %llu\n", bitmap_len);
 			return -EINVAL;
 		}
 
-		ret = exfat_read(bd->dev_fd, exfat->disk_bitmap, bitmap_len,
-				exfat_c2o(exfat, bitmap_clu));
-		if (ret < 0) {
+		if (!exfat_read_full(bd->dev_fd, exfat->disk_bitmap, bitmap_len,
+				exfat_c2o(exfat, bitmap_clu))) {
 			exfat_err("bitmap read failed: %d\n", errno);
 			return -EIO;
 		}
 
-		used_clus = exfat_count_used_clusters(
-				(unsigned char *)exfat->disk_bitmap,
-				bitmap_len);
+		used_clus = exfat_count_used_clusters(exfat->disk_bitmap, (size_t)bitmap_len);
 
 		exfat_info("\n---------------- Show the statistics ----------------\n");
 		dump_field("Cluster size", "%u", bd->cluster_size);
@@ -238,6 +207,17 @@ static int exfat_show_fs_info(struct exfat *exfat)
 	}
 
 	return 0;
+}
+
+static void exfat_free_inode_chain(struct exfat_inode *inode)
+{
+	struct exfat_inode *parent;
+
+	while (inode) {
+		parent = inode->parent;
+		exfat_free_inode(inode);
+		inode = parent;
+	}
 }
 
 /*
@@ -253,28 +233,25 @@ static int exfat_show_fs_info(struct exfat *exfat)
  */
 static int get_name_from_path(const char *path, char *name, size_t name_size)
 {
-	int i;
-	int name_len = 0;
-	int path_len = strlen(path);
+	const char *p = path;
+	size_t len = 0;
 
-	if (path_len == 0)
-		return 0;
+	while (*p == '/')
+		p++;
 
-	for (i = 0; i <= path_len && name_len + 1 < name_size; i++, path++) {
-		if (*path == '/' || *path == '\0') {
-			if (name_len == 0)
-				continue;
-
-			name[name_len] = 0;
-			return i;
-		}
-
-		name[name_len] = *path;
-		name_len++;
+	if (*p == '\0') {
+		name[0] = '\0';
+		return p - path;
 	}
 
-	name[0] = 0;
-	return 0;
+	while (*p != '/' && *p != '\0') {
+		if (len + 1 < name_size)
+			name[len++] = *p;
+		p++;
+	}
+
+	name[len] = '\0';
+	return p - path;
 }
 
 /*
@@ -296,60 +273,91 @@ static int exfat_create_inode_by_path(struct exfat *exfat, const char *path,
 {
 	int len, ret;
 	char name[PATH_MAX + 1];
-	struct exfat_inode *inode;
+	struct exfat_inode *cur_inode, *new_inode, *tmp;
 	struct exfat_dentry *dentry_set;
 	struct exfat_lookup_filter filter;
 	const char *p_path = path;
 
-	inode = exfat_alloc_inode(ATTR_SUBDIR);
-	if (!inode)
+	cur_inode = exfat_alloc_inode(ATTR_SUBDIR);
+	if (!cur_inode)
 		return -ENOMEM;
 
-	*inode = *exfat->root;
-	*dir_is_contiguous = inode->is_contiguous;
+	cur_inode->parent = NULL;
+	*cur_inode = *exfat->root;
+	*dir_is_contiguous = cur_inode->is_contiguous;
 
-	do {
-		if ((inode->attr & ATTR_SUBDIR) == 0 && *p_path != '\0') {
+	while (*p_path) {
+		if ((cur_inode->attr & ATTR_SUBDIR) == 0 && *p_path != '\0') {
 			ret = -ENOENT;
 			goto free_inode;
 		}
 
 		len = get_name_from_path(p_path, name, sizeof(name));
 		p_path += len;
-		if (name[0] == '\0' || len == 0) {
-			*new = inode;
-			return 0;
+		if (name[0] == '\0' || len == 0)
+			goto out;
+
+		if (strcmp(name, ".") == 0)
+			continue;
+
+		if (strcmp(name, "..") == 0) {
+			if (!cur_inode->parent) {
+				ret = -EINVAL;
+				goto free_inode;
+			}
+			tmp = cur_inode;
+			cur_inode = cur_inode->parent;
+			exfat_free_inode(tmp);
+			continue;
 		}
 
-		ret = exfat_utf16_enc(name, inode->name, NAME_BUFFER_SIZE);
-		if (ret < 0)
+		new_inode = exfat_alloc_inode(ATTR_SUBDIR);
+		if (!new_inode) {
+			ret = -ENOMEM;
 			goto free_inode;
+		}
 
-		ret = exfat_lookup_file_by_utf16name(exfat, inode, inode->name,
+		new_inode->parent = cur_inode;
+
+		ret = exfat_utf16_enc(name, new_inode->name, NAME_BUFFER_SIZE);
+		if (ret < 0) {
+			exfat_free_inode(new_inode);
+			goto free_inode;
+		}
+
+		ret = exfat_lookup_file_by_utf16name(exfat, cur_inode, new_inode->name,
 						     &filter);
 		if (ret) {
 			if (ret == EOF)
 				ret = -ENOENT;
+			exfat_free_inode(new_inode);
 			goto free_inode;
 		}
 
+		/* fill new inode from lookup result */
 		dentry_set = filter.out.dentry_set;
-		if (inode->dentry_set)
-			free(inode->dentry_set);
-		inode->dentry_set = dentry_set;
-		inode->dev_offset = filter.out.dev_offset;
-		inode->dentry_count = filter.out.dentry_count;
-		inode->attr = dentry_set[0].file_attr;
-		inode->first_clus = le32_to_cpu(dentry_set[1].stream_start_clu);
-		*dir_is_contiguous = inode->is_contiguous;
-		inode->is_contiguous =
+		new_inode->dentry_set = dentry_set;
+		new_inode->dev_offset = filter.out.dev_offset;
+		new_inode->dentry_count = filter.out.dentry_count;
+		new_inode->attr = dentry_set[0].file_attr;
+		new_inode->first_clus = le32_to_cpu(dentry_set[1].stream_start_clu);
+		new_inode->is_contiguous =
 			(dentry_set[1].stream_flags & EXFAT_SF_CONTIGUOUS);
-		inode->size = le64_to_cpu(dentry_set[1].stream_size);
-	} while (1);
+		new_inode->size = le64_to_cpu(dentry_set[1].stream_size);
+
+		cur_inode = new_inode;
+	}
+
+out:
+	if (cur_inode->parent) {
+		*dir_is_contiguous = cur_inode->parent->is_contiguous;
+		exfat_free_inode_chain(cur_inode->parent);
+	}
+	*new = cur_inode;
+	return 0;
 
 free_inode:
-	exfat_free_inode(inode);
-
+	exfat_free_inode_chain(cur_inode);
 	return ret;
 }
 
@@ -385,8 +393,8 @@ static int exfat_get_next_dentry_offset(struct exfat *exfat, bool is_contiguous,
 	if (offset + DENTRY_SIZE == exfat->clus_size) {
 		ret = exfat_get_next_clus(exfat, clu, &clu);
 		if (ret) {
-			exfat_err("failed to get next dentry offset 0x%lx\n",
-					*dentry_off);
+			exfat_err("failed to get next dentry offset 0x%llx\n",
+					(unsigned long long)*dentry_off);
 			return ret;
 		}
 
@@ -509,10 +517,10 @@ static void exfat_show_stream_dentry(struct exfat_dentry *ed,
 		exfat_show_cluster_chain(exfat, ed);
 }
 
-static void exfat_show_bytes(const char *name, unsigned char *bytes, int n)
+static void exfat_show_bytes(const char *name, unsigned char *bytes, size_t n)
 {
 	char buf[64];
-	int i, len = 0;
+	size_t i, len = 0;
 
 	for (i = 0; i < n && len < sizeof(buf); i++)
 		len += snprintf(buf + len, sizeof(buf) - len, "%02X", bytes[i]);
@@ -520,8 +528,8 @@ static void exfat_show_bytes(const char *name, unsigned char *bytes, int n)
 	exfat_info("%-33s  %s\n", name, buf);
 }
 
-#define dump_bytes_field(name, feild)	\
-	exfat_show_bytes("   " name ":", (unsigned char *)feild, sizeof(feild))
+#define dump_bytes_field(name, field)	\
+	exfat_show_bytes("   " name ":", (unsigned char *)(field), sizeof((field)))
 
 static void exfat_show_name_dentry(struct exfat_dentry *ed,
 		struct exfat *exfat, uint32_t flags)
@@ -609,10 +617,9 @@ static struct show_dentry show_dentry_array[] = {
 static void exfat_show_dentry(struct exfat *exfat, struct exfat_dentry *ed,
 		unsigned int index, off_t dentry_off, uint32_t flags)
 {
-	int i;
 	struct show_dentry *sd = NULL;
 
-	for (i = 0; i < sizeof(show_dentry_array) / sizeof(*sd); i++) {
+	for (size_t i = 0; i < sizeof(show_dentry_array) / sizeof(*sd); i++) {
 		if (show_dentry_array[i].type == ed->type) {
 			sd = show_dentry_array + i;
 			break;
@@ -726,7 +733,7 @@ static int exfat_create_inode(struct exfat *exfat,
 		}
 
 		inode->dentry_set[i] = *dentry;
-		if (dentry->type == EXFAT_NAME)
+		if (dentry->type == EXFAT_NAME && i < 2 + MAX_NAME_DENTRIES)
 			memcpy(inode->name + (i - 2) * ENTRY_NAME_MAX,
 					dentry->name_unicode,
 					sizeof(dentry->name_unicode));
@@ -889,7 +896,8 @@ int main(int argc, char *argv[])
 	const char *path = NULL;
 	uint32_t flags = 0;
 
-	init_user_input(&ui);
+	exfat_init_blk_dev_info(&bd);
+	exfat_init_user_input(&ui);
 	ui.writeable = false;
 
 	if (!setlocale(LC_CTYPE, ""))
@@ -936,7 +944,7 @@ int main(int argc, char *argv[])
 	exfat = exfat_alloc_exfat(&bd, NULL, NULL);
 	if (!exfat) {
 		ret = -ENOMEM;
-		goto close_dev_fd;
+		goto out;
 	}
 
 	if (path)
@@ -946,9 +954,9 @@ int main(int argc, char *argv[])
 
 	exfat_free_exfat(exfat);
 
-close_dev_fd:
-	close(bd.dev_fd);
-
 out:
-	return ret;
+	exfat_deinit_blk_dev_info(&bd);
+	exfat_deinit_user_input(&ui);
+
+	return ret ? EXIT_FAILURE : EXIT_SUCCESS;
 }

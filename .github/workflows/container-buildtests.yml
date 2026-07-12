@@ -5,6 +5,14 @@ on:
     branches:
       - master
       - exfat-next
+    paths-ignore:
+      - 'manpages/**'
+      - '**.md'
+      - '**.txt'
+      - '.editorconfig'
+      - '.gitignore'
+      - 'COPYING'
+      - 'NEWS'
   pull_request:
     branches:
       - master
@@ -16,11 +24,16 @@ jobs:
     container:
       image: alpine:latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Packages
-        run: apk --update add alpine-sdk autoconf libtool automake linux-headers bash xxd xz
+        run: |
+          apk --update add \
+            alpine-sdk autoconf libtool automake linux-headers bash xxd xz \
+            util-linux-dev
       - name: Autoconf and Configure
         run: ./autogen.sh && ./configure
+      - name: Distcheck
+        run: make -j "$(nproc)" distcheck
       - name: Build
         run: make -j$((`nproc`+1))
       - name: Install
@@ -34,13 +47,18 @@ jobs:
     container:
       image: debian:unstable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Packages
-        run: apt update && apt -y install clang lld pkgconf xxd autoconf libtool automake make xz-utils
+        run: |
+          apt-get --update --quiet --yes install \
+            clang lld pkgconf xxd autoconf \
+            libtool automake make xz-utils libblkid-dev
       - name: Autoconf and Configure
         run: |
           export LDFLAGS="-fuse-ld=lld"
           ./autogen.sh && ./configure
+      - name: Distcheck
+        run: make -j "$(nproc)" distcheck
       - name: Build
         run:  make -j$((`nproc`+1))
       - name: Install

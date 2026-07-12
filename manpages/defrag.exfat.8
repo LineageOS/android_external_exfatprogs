@@ -1,0 +1,90 @@
+.TH defrag.exfat 8
+.SH NAME
+defrag.exfat \- Defragment or assess fragmentation on an exFAT filesystem
+
+.SH SYNOPSIS
+.B defrag.exfat
+[\fB\-f\fR | \fB\-a\fR]
+.I device
+.P
+.B defrag.exfat
+\fB\-h\fR | \fB\-\-help\fR
+.P
+.B defrag.exfat
+\fB\-v\fR | \fB\-\-version\fR
+
+.SH DESCRIPTION
+.B defrag.exfat
+is a utility to defragment files on an exFAT-formatted device or assess its fragmentation status.
+
+When no option is specified, the tool warns the user to run \fBfsck.exfat\fR first for filesystem consistency.
+
+This safety prompt can be bypassed using the \fB\-f\fR option.
+
+The \fB\-a\fR option enables assessment mode, which analyzes fragmentation without modifying the filesystem.
+
+\fBdefrag.exfat\fR provides whole-disk defragmentation based on cluster swapping, which incurs a certain amount of wear overhead on flash-based storage devices with low fragmentation levels.
+
+Therefore, it is recommended to use \fBdefrag.exfat\fR on mechanical hard disk drives (HDDs) or flash-based devices that exhibit a relatively high degree of fragmentation.
+
+.SH OPTIONS
+.TP
+.B \-f, \-\-force
+Perform defragmentation without prompting the fsck warning. Use with caution.
+.TP
+.B \-a, \-\-assessment
+Assess the fragmentation status of the exFAT volume without making any changes.
+.TP
+.B \-v, \-\-version
+Display version information and exit.
+.TP
+.B \-h, \-\-help
+Show usage information and exit.
+
+.SH EXAMPLES
+.PP
+Defragment an unmounted exFAT device (with safety warning):
+.EX
+$ defrag.exfat /dev/sda1
+.EE
+
+.PP
+Defragment without prompting (force mode):
+.EX
+$ defrag.exfat -f /dev/sda1
+.EE
+
+.PP
+Assess fragmentation status (read-only):
+.EX
+$ defrag.exfat -a /dev/sda1
+.EE
+
+.PP
+Show version:
+.EX
+$ defrag.exfat -v
+.EE
+
+.PP
+Show help:
+.EX
+$ defrag.exfat -h
+.EE
+
+.SH NOTES
+Before defragmentation:
+.IP -
+The target device must be \fBunmounted\fR.
+.IP -
+Please run \fBfsck.exfat\fR on the target device to ensure filesystem integrity.
+.IP -
+Considering the potential risks of defragmentation, critical data should be \fBbacked up\fR in advance.
+.PP
+
+During defragmentation:
+.IP -
+Always keep the device \fBconnected and powered\fR.
+.IP -
+If the device is removed, powered off, or experiences a hardware failure, the filesystem may become corrupted.
+.PP

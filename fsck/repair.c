@@ -47,8 +47,10 @@ static struct exfat_repair_problem problems[] = {
 	{ER_BS_BOOT_REGION, 0, ERP_FIX, 0, 0, 0},
 	{ER_DE_CHECKSUM, ERF_PREEN_YES, ERP_DELETE, 0, 0, 0},
 	{ER_DE_UNKNOWN, ERF_PREEN_YES, ERP_DELETE, 0, 0, 0},
+	{ER_DE_UNUSED, ERF_PREEN_YES, ERP_FIX, 0, 0, 0},
 	{ER_DE_FILE, ERF_PREEN_YES, ERP_DELETE, 0, 0, 0},
 	{ER_DE_UPCASE, ERF_PREEN_YES, ERP_FIX, 0, 0, 0},
+	{ER_DE_BITMAP, ERF_PREEN_YES, ERP_FIX, 0, 0, 0},
 	{ER_DE_SECONDARY_COUNT, ERF_PREEN_YES, ERP_FIX, 0, 0, 0},
 	{ER_DE_STREAM, ERF_PREEN_YES, ERP_DELETE, 0, 0, 0},
 	{ER_DE_NAME, ERF_PREEN_YES, ERP_DELETE, 0, 0, 0},
@@ -65,6 +67,8 @@ static struct exfat_repair_problem problems[] = {
 	{ER_FILE_DUPLICATED_CLUS, ERF_PREEN_YES, ERP_TRUNCATE, 0, 0, 0},
 	{ER_FILE_ZERO_NOFAT, ERF_PREEN_YES, ERP_FIX, 0, 0, 0},
 	{ER_VENDOR_GUID, ERF_DEFAULT_NO, ERP_FIX, 0, 0, 0},
+	{ER_MBR_REQUIRED, ERF_PREEN_YES, ERP_FIX, 0, 0, 0},
+	{ER_MBR_CLEAR, ERF_PREEN_YES, ERP_DELETE, 0, 0, 0},
 };
 
 static struct exfat_repair_problem *find_problem(er_problem_code_t prcode)

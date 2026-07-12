@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <time.h>
+#include <inttypes.h>
 
 #include "exfat_ondisk.h"
 #include "libexfat.h"
@@ -46,11 +47,10 @@ static ssize_t write_block(struct exfat_de_iter *iter, unsigned int block)
 		if (BITMAP_GET(desc->dirty, i)) {
 			device_offset = exfat_c2o(exfat, desc->p_clus) +
 				desc->offset;
-			if (exfat_write(exfat->blk_dev->dev_fd,
+			if (!exfat_write_full(exfat->blk_dev->dev_fd,
 					desc->buffer + i * iter->write_size,
 					iter->write_size,
-					device_offset + i * iter->write_size)
-					!= (ssize_t)iter->write_size)
+					device_offset + i * iter->write_size))
 				return -EIO;
 			BITMAP_CLEAR(desc->dirty, i);
 		}
@@ -261,7 +261,6 @@ int exfat_de_iter_get(struct exfat_de_iter *iter,
 			int ith, struct exfat_dentry **dentry)
 {
 	off_t next_de_file_offset;
-	ssize_t ret;
 	unsigned int block;
 	struct buffer_desc *bd;
 
@@ -269,15 +268,21 @@ int exfat_de_iter_get(struct exfat_de_iter *iter,
 			ith * sizeof(struct exfat_dentry);
 	block = (unsigned int)(next_de_file_offset / iter->read_size);
 
-	if (next_de_file_offset + sizeof(struct exfat_dentry) >
-		iter->parent->size)
+	if (next_de_file_offset < 0 ||
+			next_de_file_offset + (off_t)sizeof(struct exfat_dentry) < 0)
+		return -EOVERFLOW;
+
+	if ((uint64_t)next_de_file_offset + sizeof(struct exfat_dentry) > iter->parent->size)
 		return EOF;
 
 	/* read next cluster if needed */
 	if (next_de_file_offset >= iter->next_read_offset) {
-		ret = read_block(iter, block);
-		if (ret != (ssize_t)iter->read_size)
-			return ret;
+		if (read_block(iter, block) != (ssize_t)iter->read_size) {
+			exfat_err("failed to read from device at offset %#" PRIx64 "\n",
+				  exfat_de_iter_device_offset(iter));
+
+			return -EIO;
+		}
 		iter->next_read_offset += iter->read_size;
 	}
 
@@ -330,6 +335,63 @@ int exfat_de_iter_advance(struct exfat_de_iter *iter, int skip_dentries)
 	iter->max_skip_dentries = 0;
 	iter->de_file_offset = iter->de_file_offset +
 				skip_dentries * sizeof(struct exfat_dentry);
+	return 0;
+}
+
+/* revert @num dentries from current dentry */
+int exfat_de_iter_revert(struct exfat_de_iter *iter, int num)
+{
+	int ret;
+	off_t file_offset;
+	clus_t clu_idx, clu;
+	unsigned int dest_block, cur_block;
+	unsigned int offset;
+	struct buffer_desc *cur_bd, *dest_bd;
+	struct exfat *exfat = iter->exfat;
+
+	if (iter->de_file_offset < num * DENTRY_SIZE)
+		return -EINVAL;
+
+	file_offset = iter->de_file_offset - num * DENTRY_SIZE;
+	dest_block = (unsigned int)(file_offset / iter->read_size);
+	cur_block = (unsigned int)(iter->de_file_offset / iter->read_size);
+
+	/* The entries are in the same buffer_desc */
+	if (dest_block == cur_block)
+		goto out;
+
+	cur_bd = exfat_de_iter_get_buffer(iter, cur_block);
+	dest_bd = exfat_de_iter_get_buffer(iter, dest_block);
+
+	clu_idx = file_offset / exfat->clus_size;
+	if (clu_idx < iter->de_file_offset / exfat->clus_size) {
+		/* The entries are not in the same cluster */
+		ret = exfat_get_clus(exfat, iter->parent, clu_idx, &clu);
+		if (ret < 0)
+			return ret;
+	} else
+		clu = cur_bd->p_clus;
+
+	offset = (dest_block * iter->read_size) % exfat->clus_size;
+
+	/* the data of dest_block is in dest_bd */
+	if (dest_bd->p_clus == clu && offset == dest_bd->offset)
+		goto out;
+
+	/* flush then read if the data of dest_block is not in dest_bd */
+	exfat_de_iter_flush(iter);
+	dest_bd->p_clus = clu;
+	dest_bd->offset = offset;
+
+	if (!exfat_read_full(exfat->blk_dev->dev_fd, dest_bd->buffer, iter->read_size,
+			exfat_c2o(exfat, clu) + offset))
+		return -EIO;
+
+out:
+	iter->max_skip_dentries = 0;
+	iter->de_file_offset = file_offset;
+	iter->next_read_offset = (file_offset & ~(iter->read_size - 1)) + iter->read_size;
+
 	return 0;
 }
 
@@ -843,14 +905,14 @@ static int exfat_write_dentry_set(struct exfat *exfat,
 		sec_half_off = exfat_c2o(exfat, next_clus);
 	}
 
-	if (exfat_write(exfat->blk_dev->dev_fd, dset, first_half_len,
-			first_half_off) != (ssize_t)first_half_len)
+	if (!exfat_write_full(exfat->blk_dev->dev_fd, dset, first_half_len,
+			first_half_off))
 		return -EIO;
 
 	if (sec_half_len) {
 		dset = (struct exfat_dentry *)((char *)dset + first_half_len);
-		if (exfat_write(exfat->blk_dev->dev_fd, dset, sec_half_len,
-				sec_half_off) != (ssize_t)sec_half_len)
+		if (!exfat_write_full(exfat->blk_dev->dev_fd, dset, sec_half_len,
+				sec_half_off))
 			return -EIO;
 	}
 
