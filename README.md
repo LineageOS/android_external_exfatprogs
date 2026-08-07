@@ -116,8 +116,7 @@ The difference in the execution time for each testing is very small.
 [exfat-fuse fsck]: https://github.com/relan/exfat
 
 ## Sending feedback
-If you have any issues, please create [issues][1] or contact to [Namjae Jeon](mailto:linkinjeon@kernel.org) and
-[Hyunchul Lee](mailto:hyc.lee@gmail.com).
+If you have any issues, please create [issues][1] or contact to [exfat mailing list](mailto:exfat@lists.linux.dev). 
 [Contributions][2] are also welcome.
 
 [1]: https://github.com/exfatprogs/exfatprogs/issues

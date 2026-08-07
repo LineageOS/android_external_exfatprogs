@@ -513,8 +513,8 @@ static int exfat_boot_region_check(struct exfat_blk_dev *blkdev,
 				   bool ignore_bad_fs_name)
 {
 	struct pbr *boot_sect;
-	unsigned int sect_size;
-	int ret;
+	unsigned int sect_size = 0; /* zero if invalid */
+	int ret = -EINVAL;
 
 	/* First, find out the exfat sector size */
 	boot_sect = malloc(sizeof(*boot_sect));
@@ -534,12 +534,14 @@ static int exfat_boot_region_check(struct exfat_blk_dev *blkdev,
 		return -ENOTSUP;
 	}
 
-	sect_size = 1 << boot_sect->bsx.sect_size_bits;
+	/* check boot regions */
+	if (9 <= boot_sect->bsx.sect_size_bits && boot_sect->bsx.sect_size_bits <= 12) {
+		sect_size = 1 << boot_sect->bsx.sect_size_bits;
+		ret = read_boot_region(blkdev, bs, BOOT_SEC_IDX, sect_size, true);
+	} else
+		exfat_err("invalid sector size\n");
 	free(boot_sect);
 
-	/* check boot regions */
-	ret = read_boot_region(blkdev, bs,
-			       BOOT_SEC_IDX, sect_size, true);
 	if (ret == -EINVAL &&
 	    exfat_repair_ask(&exfat_fsck, ER_BS_BOOT_REGION,
 			     "boot region is corrupted. try to restore the region from backup"
@@ -547,7 +549,7 @@ static int exfat_boot_region_check(struct exfat_blk_dev *blkdev,
 		const unsigned int sector_sizes[] = {512, 4096, 1024, 2048};
 		unsigned int i;
 
-		if (sect_size >= 512 && sect_size <= EXFAT_MAX_SECTOR_SIZE) {
+		if (sect_size) {
 			ret = read_boot_region(blkdev, bs,
 					       BACKUP_BOOT_SEC_IDX, sect_size,
 					       false);
@@ -1302,12 +1304,63 @@ out:
 	return retval;
 }
 
-/*
- * Checks whether there are other directory entries following the unused
- * directory entries. If so, sets the unused directory entries to the deleted
- * directory entries(Type 0x7F).
- */
-static int check_unused_dentry(struct exfat_de_iter *de_iter,
+static int scan_unused_dentry(struct exfat_fsck *fsck,
+		struct exfat_de_iter *de_iter, struct exfat_inode *dir)
+{
+	struct exfat *exfat = de_iter->exfat;
+	off_t file_offset;
+	clus_t clus;
+	clus_t clus_idx;
+	unsigned int clus_offset;
+	unsigned int size;
+	unsigned int offset;
+	int err;
+
+	file_offset = exfat_de_iter_file_offset(de_iter);
+	if ((uint64_t)file_offset >= dir->size ||
+		dir->size - (uint64_t)file_offset <= DENTRY_SIZE)
+		return 0;
+
+	if (!fsck->scan_buffer)
+		return -ENOMEM;
+
+	file_offset += DENTRY_SIZE;
+	clus_idx = file_offset / exfat->clus_size;
+	clus_offset = file_offset % exfat->clus_size;
+	err = exfat_get_clus(exfat, dir, clus_idx, &clus);
+	if (err)
+		return err;
+
+	while ((uint64_t)file_offset < dir->size) {
+		size = MIN(fsck->scan_size, exfat->clus_size - clus_offset);
+		size = MIN(size, (unsigned int)(dir->size - file_offset));
+		if (!exfat_read_full(exfat->blk_dev->dev_fd, fsck->scan_buffer, size,
+				exfat_c2o(exfat, clus) + clus_offset))
+			return -EIO;
+
+		for (offset = 0; offset + DENTRY_SIZE <= size;
+				offset += DENTRY_SIZE) {
+			if (fsck->scan_buffer[offset] != EXFAT_LAST)
+				return 1;
+		}
+
+		file_offset += size;
+		clus_offset += size;
+		if (clus_offset == exfat->clus_size &&
+				(uint64_t)file_offset < dir->size) {
+			err = exfat_get_inode_next_clus(exfat, dir, clus, &clus);
+			if (err)
+				return err;
+			if (clus == EXFAT_EOF_CLUSTER)
+				return -EIO;
+			clus_offset = 0;
+		}
+	}
+
+	return 0;
+}
+
+static int check_unused_dentry_slow(struct exfat_de_iter *de_iter,
 		struct exfat_inode *dir)
 {
 	int ret, i;
@@ -1351,6 +1404,23 @@ static int check_unused_dentry(struct exfat_de_iter *de_iter,
 	}
 
 	return 1;
+}
+
+/*
+ * Checks whether there are other directory entries following the unused
+ * directory entries. If so, sets the unused directory entries to the deleted
+ * directory entries(Type 0x7F).
+ */
+static int check_unused_dentry(struct exfat_fsck *fsck,
+		struct exfat_de_iter *de_iter, struct exfat_inode *dir)
+{
+	int ret;
+
+	ret = scan_unused_dentry(fsck, de_iter, dir);
+	if (ret <= 0)
+		return ret;
+
+	return check_unused_dentry_slow(de_iter, dir);
 }
 
 static int read_children(struct exfat_fsck *fsck, struct exfat_inode *dir)
@@ -1409,7 +1479,7 @@ static int read_children(struct exfat_fsck *fsck, struct exfat_inode *dir)
 			}
 			break;
 		case EXFAT_LAST:
-			ret = check_unused_dentry(de_iter, dir);
+			ret = check_unused_dentry(fsck, de_iter, dir);
 			if (ret < 0) {
 				exfat_stat.error_count++;
 				break;
@@ -1921,8 +1991,7 @@ int main(int argc, char * const argv[])
 
 	print_level = EXFAT_ERROR;
 
-	if (!setlocale(LC_CTYPE, ""))
-		exfat_err("failed to init locale/codeset\n");
+	setlocale(LC_ALL, "");
 
 	opterr = 0;
 	while ((c = getopt_long(argc, argv, "arynpbsPVvh", opts, NULL)) != EOF) {
@@ -2052,6 +2121,13 @@ int main(int argc, char * const argv[])
 		goto err;
 	}
 
+	exfat_fsck.scan_size = MIN(exfat_fsck.exfat->clus_size, 128 * KB);
+	exfat_fsck.scan_buffer = malloc(exfat_fsck.scan_size);
+	if (!exfat_fsck.scan_buffer) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
 	if ((exfat_fsck.options & FSCK_OPTS_REPAIR_WRITE) &&
 	    exfat_mark_volume_dirty(exfat_fsck.exfat, true)) {
 		ret = -EIO;
@@ -2067,7 +2143,8 @@ int main(int argc, char * const argv[])
 
 	if (exfat_fsck.options & FSCK_OPTS_PROGRESS_BAR) {
 		used_clus_count = exfat_count_used_clusters(exfat_fsck.exfat->disk_bitmap,
-				(size_t)exfat_fsck.exfat->disk_bitmap_size);
+				(size_t)exfat_fsck.exfat->disk_bitmap_size,
+				exfat_fsck.exfat->clus_count);
 		progress_init(&exfat_fsck.progress_bar, 0, used_clus_count, 0);
 	}
 
@@ -2115,6 +2192,7 @@ err:
 
 	if (exfat_fsck.buffer_desc)
 		exfat_free_buffer(exfat_fsck.exfat, exfat_fsck.buffer_desc);
+	free(exfat_fsck.scan_buffer);
 	if (exfat_fsck.exfat)
 		exfat_free_exfat(exfat_fsck.exfat);
 

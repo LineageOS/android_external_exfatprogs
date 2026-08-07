@@ -115,17 +115,35 @@ int exfat_bitmap_find_one(struct exfat *exfat, unsigned char *bmap,
 				     start_clu, next, 1);
 }
 
-unsigned int exfat_count_used_clusters(const void *bitmap, const size_t bitmap_len)
+unsigned int exfat_count_used_clusters(const void *bitmap, const size_t size,
+		const unsigned int total_clus)
 {
-	const size_t lc = bitmap_len / sizeof(unsigned long);
+	const size_t content_len = DIV_ROUND_UP(total_clus, 8);
+	const size_t lb_index = content_len - 1;
+	const size_t calc_len = MIN(size, content_len);
+	const unsigned int last_bits = total_clus % CHAR_BIT;
+	const size_t lc = calc_len / sizeof(unsigned long);
 	unsigned int ret = 0;
 
 	assert((uintptr_t)bitmap % sizeof(unsigned long) == 0);
 
 	for (size_t i = 0; i < lc; i++)
-		ret += __builtin_popcountl(((unsigned long*)bitmap)[i]);
-	for (size_t i = lc * sizeof(unsigned long); i < bitmap_len; i++)
-		ret += __builtin_popcountl(((unsigned char*)bitmap)[i]);
+		ret += __builtin_popcountl(((unsigned long *)bitmap)[i]);
+	for (size_t i = lc * sizeof(unsigned long); i < calc_len; i++)
+		ret += __builtin_popcountl(((unsigned char *)bitmap)[i]);
+
+	/*
+	 * Subtract the garbage ones in the last byte that might have been
+	 * counted. This is much simpler than trying to mask the last byte on
+	 * the fly.
+	 */
+	if (lb_index < calc_len && last_bits != 0) {
+		const unsigned char gmask = (1 << last_bits) - 1;
+		unsigned char lb = ((unsigned char *)bitmap)[lb_index];
+
+		lb &= ~gmask;
+		ret -= __builtin_popcountl(lb);
+	}
 
 	return ret;
 }
@@ -978,6 +996,7 @@ out:
 
 static int set_guid(__u8 *guid, const char *input)
 {
+	__u8 buf[EXFAT_GUID_LEN];
 	int i, j, zero_len = 0;
 	int len = strlen(input);
 
@@ -1004,9 +1023,9 @@ static int set_guid(__u8 *guid, const char *input)
 		}
 
 		if (j & 1)
-			guid[j >> 1] |= ch;
+			buf[j >> 1] |= ch;
 		else
-			guid[j >> 1] = ch << 4;
+			buf[j >> 1] = ch << 4;
 
 		j++;
 
@@ -1018,6 +1037,27 @@ static int set_guid(__u8 *guid, const char *input)
 		exfat_err("%s is invalid for volume GUID\n", input);
 		return -EINVAL;
 	}
+
+	guid[0] = buf[3];
+	guid[1] = buf[2];
+	guid[2] = buf[1];
+	guid[3] = buf[0];
+
+	guid[4] = buf[5];
+	guid[5] = buf[4];
+
+	guid[6] = buf[7];
+	guid[7] = buf[6];
+
+	guid[8] = buf[8];
+	guid[9] = buf[9];
+
+	guid[10] = buf[10];
+	guid[11] = buf[11];
+	guid[12] = buf[12];
+	guid[13] = buf[13];
+	guid[14] = buf[14];
+	guid[15] = buf[15];
 
 	return 0;
 }
