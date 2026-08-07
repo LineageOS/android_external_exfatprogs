@@ -37,7 +37,7 @@ AC_CONFIG_FILES([
 ])
 
 AC_CHECK_HEADERS([fts.h], [have_fts_h="yes"])
-AM_CONDITIONAL([ENABLE_DOSATTR], [test "x$have_fts_h" == "xyes"])
+AM_CONDITIONAL([ENABLE_DOSATTR], [test "x$have_fts_h" = "xyes"])
 AM_COND_IF(
 	[ENABLE_DOSATTR],
 	[AC_CHECK_LIB([fts], [fts_open])],
@@ -50,5 +50,11 @@ AM_COND_IF(
 # executables, libblkid.a will have to be built first.
 PKG_CHECK_MODULES([BLKID], [blkid >= 2.20], [AC_DEFINE([HAVE_BLKID], [1], [Define if libblkid is from util-linux])],
 	[PKG_CHECK_MODULES([EXT2_BLKID], [blkid], [AC_DEFINE([HAVE_EXT2_BLKID], [1], [Define if libblkid is from libext2])])])
+
+AC_ARG_ENABLE([tests],
+	AS_HELP_STRING([--enable-tests], [build internal test programs])
+	[enable_tests=yes]
+)
+AM_CONDITIONAL([ENABLE_TESTS], [test "x$enable_tests" = xyes])
 
 AC_OUTPUT

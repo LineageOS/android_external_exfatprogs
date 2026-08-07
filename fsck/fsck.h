@@ -27,6 +27,8 @@ struct exfat_fsck {
 	struct exfat		*exfat;
 	struct exfat_de_iter	de_iter;
 	struct buffer_desc	*buffer_desc;	/* cluster * 2 */
+	unsigned char		*scan_buffer;
+	unsigned int		scan_size;
 	enum fsck_ui_options	options;
 	int			mbr; /* negative to clear, positive to put */
 	bool			dirty:1;

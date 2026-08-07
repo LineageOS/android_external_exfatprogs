@@ -198,7 +198,8 @@ static int exfat_show_fs_info(struct exfat *exfat)
 			return -EIO;
 		}
 
-		used_clus = exfat_count_used_clusters(exfat->disk_bitmap, (size_t)bitmap_len);
+		used_clus = exfat_count_used_clusters(exfat->disk_bitmap, (size_t)bitmap_len,
+						      exfat->clus_count);
 
 		exfat_info("\n---------------- Show the statistics ----------------\n");
 		dump_field("Cluster size", "%u", bd->cluster_size);
@@ -900,8 +901,7 @@ int main(int argc, char *argv[])
 	exfat_init_user_input(&ui);
 	ui.writeable = false;
 
-	if (!setlocale(LC_CTYPE, ""))
-		exfat_err("failed to init locale/codeset\n");
+	setlocale(LC_ALL, "");
 
 	opterr = 0;
 	while ((c = getopt_long(argc, argv, "iVhd:s:rc", opts, NULL)) != EOF)

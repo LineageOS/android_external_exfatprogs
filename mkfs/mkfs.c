@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
+#include <linux/fs.h>
 #include <fcntl.h>
 #include <getopt.h>
 #include <inttypes.h>
@@ -1446,8 +1447,7 @@ int main(int argc, char *argv[])
 	exfat_init_blk_dev_info(&bd);
 	exfat_init_user_input(&ui);
 
-	if (!setlocale(LC_CTYPE, ""))
-		exfat_err("failed to init locale/codeset\n");
+	setlocale(LC_ALL, "");
 
 	opterr = 0;
 	while ((c = getopt_long(argc, argv, "n:L:U:s:c:b:P:fFCKVqvh", opts, NULL)) != EOF)
@@ -1695,8 +1695,24 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	exfat_info("Synchronizing...\n");
+	if (!quiet)
+		exfat_info("Synchronizing...\n");
 	ret = fsync(bd.dev_fd);
+	if (ret) {
+		exfat_err("Sync failed: %s\n", strerror(errno));
+		goto out;
+	}
+
+	if (ui.part_table && bd.isblk) {
+		errno = 0;
+		if (ioctl(bd.dev_fd, BLKRRPART) != 0) {
+			exfat_err("BLKRRPART ioctl(): %s\n", strerror(errno));
+			exfat_err("Failed to inform the kernel of the new partition table.\n"
+				  "The volume may not show up and you'll have to reconnect "
+				  "the device or reboot to be able to use the volume.\n");
+		}
+	}
+
 out:
 	if (ret && gptwo_tried) {
 		exfat_info("Wiping out GPT structures...\n");
@@ -1718,8 +1734,10 @@ out:
 	exfat_deinit_blk_dev_info(&bd);
 	exfat_deinit_user_input(&ui);
 
-	if (!ret)
-		exfat_info("\nexFAT format complete!\n");
+	if (!ret) {
+		if (!quiet)
+			exfat_info("\nexFAT format complete!\n");
+	}
 	else
 		exfat_err("\nexFAT format fail!\n");
 	return ret ? EXIT_FAILURE : EXIT_SUCCESS;
@@ -1793,8 +1811,8 @@ void exfat_gen_guid(void *out)
 			uint32_t a;
 			uint16_t b;
 			uint8_t ver[2];
-			uint16_t c;
-			uint32_t d;
+			uint8_t var[2];
+			uint32_t c;
 		} parts;
 	} __attribute__((__packed__)) rnd = { 0, };
 	struct timespec ts[2] = { 0, };
@@ -1824,8 +1842,9 @@ void exfat_gen_guid(void *out)
 		if (memcmp(&rnd, zm, 16) == 0)
 			continue;
 
-		rnd.parts.ver[0] &= 0xF0;
-		rnd.parts.ver[0] |= 0x04;
+		rnd.parts.ver[1] &= 0x0F;
+		rnd.parts.ver[1] |= 0x40;
+		rnd.parts.var[0] = (rnd.parts.var[0] & 0x3F) | 0x80;
 		memcpy(out, &rnd, 16);
 		return;
 	}

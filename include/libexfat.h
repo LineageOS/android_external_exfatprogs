@@ -125,22 +125,14 @@ extern const char *dummy_bootcode_msg;
 
 struct exfat_user_input {
 	const char *dev_name;
-	bool writeable;
+	const char *guid;
+	unsigned char *fat_table_buff;
 	unsigned int sector_size;
 	unsigned int cluster_size;
 	unsigned int sec_per_clu;
 	unsigned int boundary_align;
-	bool pack_bitmap;
-	bool quick;
-	bool force;
-	bool verify;
-	bool discard;
-	__u16 volume_label[VOLUME_LABEL_MAX_LEN];
-	int volume_label_len;
 	unsigned int volume_serial;
-	const char *guid;
-	unsigned char *fat_table_buff;
-
+	int volume_label_len;
 	struct {
 		const char *file;
 		const unsigned char *table;
@@ -148,10 +140,15 @@ struct exfat_user_input {
 		size_t len;
 		void (*free)(struct exfat_user_input *ui);
 	} upcase;
-
 	const char *bootcode_msg;
-
 	enum exfat_part_table_type part_table;
+	__u16 volume_label[VOLUME_LABEL_MAX_LEN];
+	bool writeable:1;
+	bool pack_bitmap:1;
+	bool quick:1;
+	bool force:1;
+	bool verify:1;
+	bool discard:1;
 };
 
 /* Returns true if the option used or the option argument is not an empty string */
@@ -163,27 +160,36 @@ static inline bool exfat_ui_has_upcase_file(const struct exfat_user_input *ui)
 struct exfat;
 struct exfat_inode;
 
-#ifdef WORDS_BIGENDIAN
-typedef __u8	bitmap_t;
+#ifdef __BITS_PER_LONG
+#define BITS_PER	__BITS_PER_LONG
 #else
-typedef __u32	bitmap_t;
+/* Non-Linux polyfill(use C23) */
+#define BITS_PER	ULONG_WIDTH
 #endif
 
-#define BITS_PER	(sizeof(bitmap_t) * 8)
-#define BIT_MASK(__c)	(1 << ((__c) % BITS_PER))
-#define BIT_ENTRY(__c)	((__c) / BITS_PER)
+#if BITS_PER == 64
+typedef __u64		bitmap_t;
+#define BIT_MASK(__c)	cpu_to_le64((bitmap_t)1 << ((__c) % BITS_PER))
+#elif BITS_PER == 32
+typedef __u32		bitmap_t;
+#define BIT_MASK(__c)	cpu_to_le32((bitmap_t)1 << ((__c) % BITS_PER))
+#else
+#error "BITS_PER neither 32 or 64"
+#endif
+#define BIT_ENTRY(__c)			((__c) / BITS_PER)
+#define BITMAP_WORD_AT(bmap, bit)	((bitmap_t *)(bmap))[BIT_ENTRY(bit)]
 
 #define EXFAT_BITMAP_SIZE(__c_count)	\
-	(DIV_ROUND_UP(__c_count, BITS_PER) * sizeof(bitmap_t))
+	(DIV_ROUND_UP((uint64_t)__c_count, BITS_PER) * sizeof(bitmap_t))
 
 #define BITMAP_GET(bmap, bit)	\
-	(((bitmap_t *)(bmap))[BIT_ENTRY(bit)] & BIT_MASK(bit))
+	(BITMAP_WORD_AT(bmap, bit) & BIT_MASK(bit))
 
 #define BITMAP_SET(bmap, bit)	\
-	(((bitmap_t *)(bmap))[BIT_ENTRY(bit)] |= BIT_MASK(bit))
+	(BITMAP_WORD_AT(bmap, bit) |= BIT_MASK(bit))
 
 #define BITMAP_CLEAR(bmap, bit)	\
-	(((bitmap_t *)(bmap))[BIT_ENTRY(bit)] &= ~BIT_MASK(bit))
+	(BITMAP_WORD_AT(bmap, bit) &= ~BIT_MASK(bit))
 
 static inline bool exfat_bitmap_get(unsigned char *bmap, clus_t c)
 {
@@ -202,7 +208,8 @@ static inline void exfat_bitmap_set(unsigned char *bmap, clus_t c)
 static inline void exfat_bitmap_clear(unsigned char *bmap, clus_t c)
 {
 	clus_t cc = c - EXFAT_FIRST_CLUSTER;
-	(((bitmap_t *)(bmap))[BIT_ENTRY(cc)] &= ~BIT_MASK(cc));
+
+	BITMAP_CLEAR(bmap, cc);
 }
 
 void exfat_bitmap_set_range(struct exfat *exfat, unsigned char *bitmap,
@@ -212,9 +219,16 @@ int exfat_bitmap_find_zero(struct exfat *exfat, unsigned char *bmap,
 int exfat_bitmap_find_one(struct exfat *exfat, unsigned char *bmap,
 			  clus_t start_clu, clus_t *next);
 /*
- * Count ones in the bitmap. The function won't handle unaligned bitmaps.
+ * Count ones in the bitmap
+ *
+ * Reads up to the smallest of `size` bytes or the bytes inferred from
+ * `total_clus` are read from `bitmap`.
+ *
+ * The function won't handle unaligned memory access. `bitmap` is required to be
+ * at a word boundary(unsigned long).
  */
-unsigned int exfat_count_used_clusters(const void *bitmap, const size_t bitmap_len);
+unsigned int exfat_count_used_clusters(const void *bitmap, const size_t size,
+		const unsigned int total_clus);
 
 void show_version(void);
 
@@ -426,8 +440,8 @@ extern unsigned int print_level;
 #define exfat_print_guid(f, msg, guid)					\
 		f("%s: %02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x\n",\
 			(msg),						\
-			(guid)[0], (guid)[1], (guid)[2], (guid)[3],	\
-			(guid)[4], (guid)[5], (guid)[6], (guid)[7],	\
+			(guid)[3], (guid)[2], (guid)[1], (guid)[0],	\
+			(guid)[5], (guid)[4], (guid)[7], (guid)[6],	\
 			(guid)[8], (guid)[9], (guid)[10], (guid)[11],	\
 			(guid)[12], (guid)[13], (guid)[14], (guid)[15])
 
