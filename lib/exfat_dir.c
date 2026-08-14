@@ -390,7 +390,7 @@ int exfat_de_iter_revert(struct exfat_de_iter *iter, int num)
 out:
 	iter->max_skip_dentries = 0;
 	iter->de_file_offset = file_offset;
-	iter->next_read_offset = (file_offset & ~(iter->read_size - 1)) + iter->read_size;
+	iter->next_read_offset = (file_offset & ~((off_t)iter->read_size - 1)) + iter->read_size;
 
 	return 0;
 }
@@ -763,8 +763,8 @@ int exfat_update_file_dentry_set(struct exfat *exfat,
 		}
 	}
 
-	dset[1].dentry.stream.valid_size = cpu_to_le64(ccount * exfat->clus_size);
-	dset[1].dentry.stream.size = cpu_to_le64(ccount * exfat->clus_size);
+	dset[1].dentry.stream.valid_size = cpu_to_le64((uint64_t)ccount * exfat->clus_size);
+	dset[1].dentry.stream.size = cpu_to_le64((uint64_t)ccount * exfat->clus_size);
 	if (start_clu)
 		dset[1].dentry.stream.start_clu = cpu_to_le32(start_clu);
 
