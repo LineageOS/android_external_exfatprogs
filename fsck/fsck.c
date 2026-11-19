@@ -4,6 +4,13 @@
  *   Copyright (C) 2020 Hyunchul Lee <hyc.lee@gmail.com>
  */
 
+/* Enable tdestroy() */
+#ifdef __linux__
+#define _GNU_SOURCE
+#else
+#define _BSD_SOURCE
+#endif
+
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -14,6 +21,7 @@
 #include <locale.h>
 #include <assert.h>
 #include <fcntl.h>
+#include <search.h>
 
 #include "exfat_ondisk.h"
 #include "libexfat.h"
@@ -48,8 +56,10 @@ struct exfat_fsck exfat_fsck;
 struct exfat_stat exfat_stat;
 struct path_resolve_ctx path_resolve_ctx;
 
-#define OPTID_PUT_MBR	(128 + 0)
-#define OPTID_CLEAR_MBR	(128 + 1)
+enum longopt_num {
+	LON_PUT_MBR = CHAR_MAX + 1,
+	LON_CLEAR_MBR,
+};
 
 static struct option opts[] = {
 	{"repair",		no_argument,		NULL,	'r' },
@@ -63,8 +73,8 @@ static struct option opts[] = {
 	{"?",			no_argument,		NULL,	'?' },
 	{"ignore-bad-fs",	no_argument,		NULL,	'b' },
 	{"progress",		no_argument,		NULL,	'P' },
-	{"put-mbr",		no_argument,		NULL,	OPTID_PUT_MBR },
-	{"clear-mbr",		no_argument,		NULL,	OPTID_CLEAR_MBR },
+	{"put-mbr",		no_argument,		NULL,	LON_PUT_MBR },
+	{"clear-mbr",		no_argument,		NULL,	LON_CLEAR_MBR },
 	{NULL, 0, NULL, 0}
 };
 
@@ -285,7 +295,7 @@ static int root_check_clus_chain(struct exfat *exfat,
 		exfat_bitmap_set(exfat->alloc_bitmap, clus);
 
 		if (exfat_get_inode_next_clus(exfat, node, clus, &next)) {
-			exfat_err("ERROR: failed to read the fat entry of root");
+			exfat_err("ERROR: failed to read the fat entry of root\n");
 			goto out_trunc;
 		}
 
@@ -368,9 +378,9 @@ static int exfat_mark_volume_dirty(struct exfat *exfat, bool dirty)
 
 	flags = le16_to_cpu(exfat->bs->bsx.vol_flags);
 	if (dirty)
-		flags |= 0x02;
+		flags |= VOL_DIRTY;
 	else
-		flags &= ~0x02;
+		flags &= ~VOL_DIRTY;
 
 	exfat->bs->bsx.vol_flags = cpu_to_le16(flags);
 	if (!exfat_write_full(exfat->blk_dev->dev_fd, exfat->bs, sizeof(struct pbr), 0)) {
@@ -378,7 +388,7 @@ static int exfat_mark_volume_dirty(struct exfat *exfat, bool dirty)
 		return -EIO;
 	}
 
-	if (fsync(exfat->blk_dev->dev_fd) != 0) {
+	if (exfat_fsync(exfat->blk_dev->dev_fd) != 0) {
 		exfat_err("failed to set VolumeDirty\n");
 		return -EIO;
 	}
@@ -409,6 +419,20 @@ static int read_boot_region(struct exfat_blk_dev *bd, struct pbr **pbr,
 	if (memcmp(bs->bpb.oem_name, "EXFAT   ", 8) != 0) {
 		if (verbose)
 			exfat_err("failed to find exfat file system\n");
+		goto err;
+	}
+
+	if (bs->bsx.sect_size_bits < 9 || bs->bsx.sect_size_bits > 12) {
+		if (verbose)
+			exfat_err("invalid sector size bits: %u\n",
+				  bs->bsx.sect_size_bits);
+		goto err;
+	}
+
+	if (bs->bsx.sect_per_clus_bits > 25 - bs->bsx.sect_size_bits) {
+		if (verbose)
+			exfat_err("invalid sectors per cluster bits: %u\n",
+				  bs->bsx.sect_per_clus_bits);
 		goto err;
 	}
 
@@ -513,7 +537,7 @@ static int restore_boot_region(struct exfat_blk_dev *bd, unsigned int sect_size)
 		}
 	}
 
-	if (fsync(bd->dev_fd)) {
+	if (exfat_fsync(bd->dev_fd)) {
 		ret = -EIO;
 		goto free_sector;
 	}
@@ -695,12 +719,30 @@ static int handle_duplicated_filename(struct exfat_de_iter *iter,
 			ER_DE_DUPLICATED_NAME, "filename is duplicated");
 }
 
+/* Util functions for name_hash_tree */
+
+static void hash_tree_freef(void *ptr)
+{
+	/* Do nothing: no memory is dynamically allocated on our end */
+	(void)ptr;
+}
+
+static int hash_tree_compf(const void *a, const void *b)
+{
+	if ((uintptr_t)a == (uintptr_t)b)
+		return 0;
+	if ((uintptr_t)a < (uintptr_t)b)
+		return -1;
+	return 1;
+}
+
 static int check_name_dentry_set(struct exfat_de_iter *iter,
 				 struct exfat_inode *inode)
 {
 	struct exfat_dentry *stream_de;
 	size_t name_len;
 	__u16 hash;
+	uint32_t hash_crc32;
 	int ret = 0;
 
 	exfat_de_iter_get(iter, 1, &stream_de);
@@ -730,6 +772,7 @@ static int check_name_dentry_set(struct exfat_de_iter *iter,
 	}
 
 	hash = exfat_calc_name_hash(iter->exfat, inode->name, (int)name_len);
+	hash_crc32 = exfat_calc_name_hash_crc32(iter->exfat, inode->name, (int)name_len);
 	if (cpu_to_le16(hash) != stream_de->stream_name_hash) {
 		if (repair_file_ask(iter, NULL, ER_DE_NAME_HASH,
 				    "the name hash of a file is wrong")) {
@@ -741,10 +784,18 @@ static int check_name_dentry_set(struct exfat_de_iter *iter,
 		}
 	}
 
-	if (BITMAP_GET(iter->name_hash_bitmap, hash)) {
+	if (tfind((void *)(uintptr_t)hash_crc32, iter->name_hash_tree, hash_tree_compf))
 		ret = handle_duplicated_filename(iter, inode);
-	} else
-		BITMAP_SET(iter->name_hash_bitmap, hash);
+	else {
+		void *inserted = tsearch((void *)(uintptr_t)hash_crc32,
+					 iter->name_hash_tree, hash_tree_compf);
+
+		if (inserted == NULL) {
+			exfat_err("failed to allocate memory\n");
+			/* Returning -ENOMEM here results in incorrect behaviour :( */
+			exit(FSCK_EXIT_OPERATION_ERROR);
+		}
+	}
 
 	return ret;
 }
@@ -1455,9 +1506,11 @@ static int read_children(struct exfat_fsck *fsck, struct exfat_inode *dir)
 	else if (ret)
 		return ret;
 
-	de_iter->name_hash_bitmap = fsck->name_hash_bitmap;
-	memset(fsck->name_hash_bitmap, 0,
-			EXFAT_BITMAP_SIZE(EXFAT_MAX_HASH_COUNT));
+	if (fsck->name_hash_tree != NULL) {
+		tdestroy(fsck->name_hash_tree, hash_tree_freef);
+		fsck->name_hash_tree = NULL;
+	}
+	de_iter->name_hash_tree = &fsck->name_hash_tree;
 
 	while (1) {
 		ret = exfat_de_iter_get(de_iter, 0, &dentry);
@@ -1596,12 +1649,6 @@ static int exfat_filesystem_check(struct exfat_fsck *fsck)
 		return -ENOENT;
 	}
 
-	fsck->name_hash_bitmap = malloc(EXFAT_BITMAP_SIZE(EXFAT_MAX_HASH_COUNT));
-	if (!fsck->name_hash_bitmap) {
-		exfat_err("failed to allocate name hash bitmap\n");
-		return -ENOMEM;
-	}
-
 	list_add(&exfat->root->list, &exfat->dir_list);
 
 	while (!list_empty(&exfat->dir_list)) {
@@ -1630,7 +1677,11 @@ static int exfat_filesystem_check(struct exfat_fsck *fsck)
 	}
 out:
 	exfat_free_dir_list(exfat);
-	free(fsck->name_hash_bitmap);
+	if (fsck->name_hash_tree != NULL) {
+		tdestroy(fsck->name_hash_tree, hash_tree_freef);
+		fsck->name_hash_tree = NULL;
+	}
+
 	return ret;
 }
 
@@ -1749,7 +1800,7 @@ static int rescue_orphan_clusters(struct exfat_fsck *fsck)
 		return err;
 	}
 
-	if (fsync(exfat_fsck.exfat->blk_dev->dev_fd) != 0) {
+	if (exfat_fsync(exfat_fsck.exfat->blk_dev->dev_fd) != 0) {
 		exfat_err("failed to sync()\n");
 		return -EIO;
 	}
@@ -1774,7 +1825,7 @@ static int rescue_orphan_clusters(struct exfat_fsck *fsck)
 	/* build a template dentry set */
 	err = exfat_build_file_dentry_set(exfat, name, 0, &dset, &dcount);
 	if (err) {
-		exfat_err("failed to create a temporary file in LOST+FOUNDn");
+		exfat_err("failed to create a temporary file in LOST+FOUND\n");
 		goto out;
 	}
 	dset[1].dentry.stream.flags |= EXFAT_SF_CONTIGUOUS;
@@ -1899,7 +1950,7 @@ static int do_put_mbr(const struct exfat_blk_dev *bd, struct pbr *bs, const bool
 	/* dump main */
 	dump =	exfat_write_full(bd->dev_fd, sectors, ss, ss * BOOT_SEC_IDX) &&
 		exfat_write_full(bd->dev_fd, chks, ss, ss * CHECKSUM_SEC_IDX) &&
-		fsync(bd->dev_fd) == 0;
+		exfat_fsync(bd->dev_fd) == 0;
 	if (!dump)
 		goto err;
 
@@ -1907,7 +1958,7 @@ static int do_put_mbr(const struct exfat_blk_dev *bd, struct pbr *bs, const bool
 	idx = BACKUP_BOOT_SEC_IDX;
 	dump =	exfat_write_full(bd->dev_fd, sectors, ss, ss * (BOOT_SEC_IDX + idx)) &&
 		exfat_write_full(bd->dev_fd, chks, ss, ss * (CHECKSUM_SEC_IDX + idx)) &&
-		fsync(bd->dev_fd) == 0;
+		exfat_fsync(bd->dev_fd) == 0;
 	if (!dump)
 		goto err;
 
@@ -1992,6 +2043,30 @@ unrec_mbr:
 	return 0;
 }
 
+static void fsck_ioerror_callback(enum exfat_what_ioerror what, int err,
+		int fd, off_t ofs, off_t size, const void *buf, void *ctx)
+{
+	const char *w_str;
+
+	if (fd != exfat_fsck.exfat->blk_dev->dev_fd)
+		return;
+
+	/* prevent recursive callbacks */
+	exfat_set_ioerror_callback(NULL, NULL);
+
+	w_str = exfat_what_ioerror_str(what);
+	assert(w_str != NULL);
+	exfat_err("ERROR: I/O error %d at %" PRIdMAX ", length %" PRIdMAX ", %s\n",
+			err, (intmax_t)ofs, (intmax_t)size, w_str);
+
+	exfat_fsync(exfat_fsck.exfat->blk_dev->dev_fd);
+
+	exit(FSCK_EXIT_OPERATION_ERROR);
+	/* Shut compiler up */
+	(void)buf;
+	(void)ctx;
+}
+
 int main(int argc, char * const argv[])
 {
 	struct fsck_user_input ui;
@@ -2042,12 +2117,12 @@ int main(int argc, char * const argv[])
 		case 'P':
 			ui.options |= FSCK_OPTS_PROGRESS_BAR;
 			break;
-		case OPTID_PUT_MBR:
+		case LON_PUT_MBR:
 			if (exfat_fsck.mbr)
 				usage(argv[0]);
 			exfat_fsck.mbr = 1;
 			break;
-		case OPTID_CLEAR_MBR:
+		case LON_CLEAR_MBR:
 			if (exfat_fsck.mbr)
 				usage(argv[0]);
 			exfat_fsck.mbr = -1;
@@ -2066,13 +2141,17 @@ int main(int argc, char * const argv[])
 		}
 	}
 
-	show_version();
+	if (version_only) {
+		show_version(stdout);
+		exit(FSCK_EXIT_SYNTAX_ERROR);
+	}
+	if (!(ui.options & FSCK_OPTS_REPAIR_AUTO))
+		show_version(stdout);
+
 	if (optind != argc - 1 ||
 	    (ui.options & FSCK_OPTS_REPAIR_ASK && ui.options & FSCK_OPTS_PROGRESS_BAR))
 		usage(argv[0]);
 
-	if (version_only)
-		exit(FSCK_EXIT_SYNTAX_ERROR);
 	if (ui.options & FSCK_OPTS_REPAIR_WRITE)
 		ui.ei.writeable = true;
 	else {
@@ -2150,6 +2229,8 @@ int main(int argc, char * const argv[])
 		goto err;
 	}
 
+	exfat_set_ioerror_callback(fsck_ioerror_callback, NULL);
+
 	exfat_debug("verifying root directory...\n");
 	ret = exfat_root_dir_check(&exfat_fsck);
 	if (ret) {
@@ -2175,6 +2256,8 @@ int main(int argc, char * const argv[])
 		exfat_fsck.dirty_fat = true;
 	}
 
+	exfat_set_ioerror_callback(NULL, NULL);
+
 	if (exfat_fsck.options & FSCK_OPTS_REPAIR_WRITE) {
 		ret = write_bitmap(&exfat_fsck);
 		if (ret) {
@@ -2183,7 +2266,7 @@ int main(int argc, char * const argv[])
 		}
 	}
 
-	if (ui.ei.writeable && fsync(bd.dev_fd)) {
+	if (ui.ei.writeable && exfat_fsync(bd.dev_fd)) {
 		exfat_err("failed to sync\n");
 		ret = -EIO;
 		goto out;
@@ -2214,6 +2297,7 @@ err:
 
 	exfat_deinit_blk_dev_info(&bd);
 	deinit_fsck_user_input(&ui);
+	exfat_print_iostat();
 
 	return exit_code;
 }

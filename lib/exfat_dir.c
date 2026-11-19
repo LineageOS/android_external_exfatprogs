@@ -537,6 +537,14 @@ static int filter_lookup_file(struct exfat_de_iter *de_iter,
 	name = (__le16 *)param;
 	name_len = (int)exfat_utf16_len(name, PATH_MAX);
 
+	/*
+	 * The name comparison below doesn't reach the terminating NUL when
+	 * name_len is a multiple of ENTRY_NAME_MAX, so a name would match any
+	 * longer name it is a prefix of. Check the length first.
+	 */
+	if (stream_de->stream_name_len != name_len)
+		return 1;
+
 	if (file_de->dentry.file.num_ext <
 		1 + (name_len + ENTRY_NAME_MAX - 1) / ENTRY_NAME_MAX)
 		return 1;
@@ -647,6 +655,19 @@ uint16_t exfat_calc_name_hash(struct exfat *exfat,
 		chksum += ch >> 8;
 	}
 	return chksum;
+}
+
+uint32_t exfat_calc_name_hash_crc32(struct exfat *exfat, __le16 *name, int len)
+{
+	uint16_t ch;
+	uint32_t crc = ~0L;
+
+	while (len-- > 0) {
+		ch = exfat->upcase_table[le16_to_cpu(*name++)];
+		crc = exfat_crc32_le_base(crc, &ch, sizeof(ch));
+	}
+
+	return (crc ^ ~0L);
 }
 
 static void unix_time_to_exfat_time(time_t unix_time, __u8 *tz, __le16 *date,
@@ -1057,4 +1078,39 @@ int exfat_create_file(struct exfat *exfat, struct exfat_inode *parent,
 out:
 	free(dset);
 	return err;
+}
+
+int exfat_format_timestamp(char *out, size_t size,
+		const union exfat_timestamp *ts, uint8_t cs, uint8_t tz)
+{
+	char tz_part[sizeof("+00:00")];
+	const unsigned int year = 1980 + (ts->date_part >> 9);
+	const unsigned int mon = (ts->date_part >> 5) & 0x000F;
+	const unsigned int day = ts->date_part & 0x001F;
+	const unsigned int hour = ts->time_part >> 11;
+	const unsigned int min = (ts->time_part >> 5) & 0x003F;
+	const unsigned int sec = (ts->time_part & 0x001F) << 1;
+	const unsigned int msec = sec * 1000 + cs * 10;
+
+	tz_part[0] = 0;
+	if (tz & 0x80) {
+		unsigned int tzoff = tz & 0x7F;
+		unsigned int tz_hour, tz_min;
+		char sign;
+
+		if (tzoff <= 0x3F) {
+			tzoff *= 15;
+			sign = '+';
+		} else {
+			tzoff = (0x80 - tzoff) * 15;
+			sign = '-';
+		}
+		tz_hour = tzoff / 60;
+		tz_min = tzoff % 60;
+
+		snprintf(tz_part, sizeof(tz_part), "%c%02u:%02u", sign, tz_hour, tz_min);
+	}
+
+	return snprintf(out, size, "%04u-%02u-%02uT%02u:%02u:%02u.%03u%s",
+			year, mon, day, hour, min, msec / 1000, msec % 1000, tz_part);
 }
