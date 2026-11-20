@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "fc5b5c53_04df246b",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 4550
+      },
+      "writtenOn": "2026-11-20T10:37:57Z",
+      "side": 1,
+      "message": "https://github.com/exfatprogs/exfatprogs/pull/410",
+      "revId": "8b85e9ecab13f42b11cdeb8541e52ce2ad4b96f6",
+      "serverId": "1ec6b3db-b2c1-4fa4-84a2-4c7efe89ba71"
+    }
+  ]
+}
